@@ -1,55 +1,130 @@
 import { useState, useEffect } from 'react';
 import type { Board as BoardType, BoardMetadata, Team, TeamMetadata } from './types';
 import { Board } from './components/Board';
-import { 
-  getInitialBoard, 
-  saveBoard, 
-  loadBoardsList, 
-  createNewBoard, 
-  deleteBoard as deleteBoardFromStorage, 
-  renameBoard as renameBoardInStorage, 
-  setActiveBoard, 
-  loadBoard,
-  loadTeamsList,
-  createNewTeam,
-  deleteTeam as deleteTeamFromStorage,
-  renameTeam as renameTeamInStorage,
-  setActiveTeam,
-  loadTeam,
-  saveTeam,
-  getActiveTeam,
-} from './utils/storage';
+import { Auth } from './components/Auth';
+import { supabase } from './utils/supabase';
+
+// Toggle between localStorage and Supabase
+const USE_SUPABASE = true; // Set to false to use localStorage
+
+import * as storageLocal from './utils/storage';
+import * as storageSupabase from './utils/storageSupabase';
+
+const storage = USE_SUPABASE ? storageSupabase : storageLocal;
+
 import { DeleteBoardModal } from './components/DeleteBoardModal';
 import './index.css';
 
 function App() {
-  const [board, setBoard] = useState<BoardType>(getInitialBoard());
-  const [boards, setBoards] = useState<BoardMetadata[]>(loadBoardsList());
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [board, setBoard] = useState<BoardType | null>(null);
+  const [boards, setBoards] = useState<BoardMetadata[]>([]);
   const [deletingBoardId, setDeletingBoardId] = useState<string | null>(null);
-  const [teams, setTeams] = useState<TeamMetadata[]>(loadTeamsList());
-  const [activeTeam, setActiveTeamState] = useState<Team | null>(getActiveTeam());
+  const [teams, setTeams] = useState<TeamMetadata[]>([]);
+  const [activeTeam, setActiveTeamState] = useState<Team | null>(null);
   const [activeView, setActiveView] = useState<'board' | 'team'>('board');
 
+  // Check authentication on mount
   useEffect(() => {
-    saveBoard(board);
-    // Refresh boards list to keep it in sync
-    setBoards(loadBoardsList());
-  }, [board]);
+    const checkAuth = async () => {
+      if (USE_SUPABASE) {
+        const { data: { session } } = await supabase.auth.getSession();
+        setIsAuthenticated(!!session);
+      } else {
+        // Skip auth for localStorage mode
+        setIsAuthenticated(true);
+      }
+      setIsLoading(false);
+    };
 
-  const handleBoardSelect = (boardId: string) => {
-    const selectedBoard = loadBoard(boardId);
-    if (selectedBoard) {
-      setBoard(selectedBoard);
-      setActiveBoard(boardId);
-      setActiveView('board');
+    checkAuth();
+  }, []);
+
+  // Load initial data when authenticated
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const loadInitialData = async () => {
+      setIsLoading(true);
+      try {
+        console.log('Starting to load initial data...');
+        
+        // Clear old localStorage IDs that might conflict
+        const oldActiveBoard = localStorage.getItem('taskflow_active_board');
+        if (oldActiveBoard && (oldActiveBoard.startsWith('board-') || oldActiveBoard === 'board-1')) {
+          console.log('Clearing old localStorage board ID:', oldActiveBoard);
+          localStorage.removeItem('taskflow_active_board');
+        }
+        
+        const oldActiveTeam = localStorage.getItem('taskflow_active_team');
+        if (oldActiveTeam && oldActiveTeam.startsWith('team-')) {
+          console.log('Clearing old localStorage team ID:', oldActiveTeam);
+          localStorage.removeItem('taskflow_active_team');
+        }
+        
+        const [initialBoard, boardsList, teamsList, activeTeam] = await Promise.all([
+          storage.getInitialBoard(),
+          storage.loadBoardsList(),
+          storage.loadTeamsList(),
+          storage.getActiveTeam(),
+        ]);
+
+        setBoard(initialBoard);
+        setBoards(boardsList);
+        setTeams(teamsList);
+        setActiveTeamState(activeTeam);
+        console.log('Initial data loaded successfully');
+      } catch (error) {
+        console.error('Error loading initial data:', error);
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    loadInitialData();
+  }, [isAuthenticated]);
+
+  // Save board whenever it changes
+  useEffect(() => {
+    if (!board || !isAuthenticated) return;
+
+    const saveBoardAsync = async () => {
+      try {
+        await storage.saveBoard(board);
+        const updatedBoards = await storage.loadBoardsList();
+        setBoards(updatedBoards);
+      } catch (error) {
+        console.error('Error saving board:', error);
+      }
+    };
+
+    saveBoardAsync();
+  }, [board, isAuthenticated]);
+
+  const handleBoardSelect = async (boardId: string) => {
+    try {
+      const selectedBoard = await storage.loadBoard(boardId);
+      if (selectedBoard) {
+        setBoard(selectedBoard);
+        storage.setActiveBoard(boardId);
+        setActiveView('board');
+      }
+    } catch (error) {
+      console.error('Error selecting board:', error);
     }
   };
 
-  const handleCreateBoard = () => {
-    const newBoard = createNewBoard('Neues Board');
-    setBoard(newBoard);
-    setActiveBoard(newBoard.id);
-    setBoards(loadBoardsList());
+  const handleCreateBoard = async () => {
+    try {
+      const newBoard = await storage.createNewBoard('Neues Board');
+      setBoard(newBoard);
+      storage.setActiveBoard(newBoard.id);
+      const updatedBoards = await storage.loadBoardsList();
+      setBoards(updatedBoards);
+    } catch (error) {
+      console.error('Error creating board:', error);
+    }
   };
 
   const handleDeleteBoardRequest = (boardId: string) => {
@@ -62,84 +137,117 @@ function App() {
     setDeletingBoardId(boardId);
   };
 
-  const handleDeleteBoardConfirm = () => {
+  const handleDeleteBoardConfirm = async () => {
     if (!deletingBoardId) return;
 
-    deleteBoardFromStorage(deletingBoardId);
-    
-    // If we deleted the active board, switch to another one
-    if (deletingBoardId === board.id) {
-      const remainingBoards = loadBoardsList();
-      if (remainingBoards.length > 0) {
-        handleBoardSelect(remainingBoards[0].id);
+    try {
+      await storage.deleteBoard(deletingBoardId);
+      
+      // If we deleted the active board, switch to another one
+      if (board && deletingBoardId === board.id) {
+        const remainingBoards = await storage.loadBoardsList();
+        if (remainingBoards.length > 0) {
+          await handleBoardSelect(remainingBoards[0].id);
+        }
       }
+      
+      const updatedBoards = await storage.loadBoardsList();
+      setBoards(updatedBoards);
+      setDeletingBoardId(null);
+    } catch (error) {
+      console.error('Error deleting board:', error);
     }
-    
-    setBoards(loadBoardsList());
-    setDeletingBoardId(null);
   };
 
   const handleDeleteBoardCancel = () => {
     setDeletingBoardId(null);
   };
 
-  const handleRenameBoard = (boardId: string, newTitle: string) => {
-    renameBoardInStorage(boardId, newTitle);
-    
-    // If renaming the active board, update the current board state
-    if (boardId === board.id) {
-      setBoard({ ...board, title: newTitle });
+  const handleRenameBoard = async (boardId: string, newTitle: string) => {
+    try {
+      await storage.renameBoard(boardId, newTitle);
+      
+      // If renaming the active board, update the current board state
+      if (board && boardId === board.id) {
+        setBoard({ ...board, title: newTitle });
+      }
+      
+      const updatedBoards = await storage.loadBoardsList();
+      setBoards(updatedBoards);
+    } catch (error) {
+      console.error('Error renaming board:', error);
     }
-    
-    setBoards(loadBoardsList());
   };
 
   // Team handlers
-  const handleTeamSelect = (teamId: string) => {
-    const selectedTeam = loadTeam(teamId);
-    if (selectedTeam) {
-      setActiveTeamState(selectedTeam);
-      setActiveTeam(teamId);
-      setActiveView('team');
+  const handleTeamSelect = async (teamId: string) => {
+    try {
+      const selectedTeam = await storage.loadTeam(teamId);
+      if (selectedTeam) {
+        setActiveTeamState(selectedTeam);
+        storage.setActiveTeam(teamId);
+        setActiveView('team');
+      }
+    } catch (error) {
+      console.error('Error selecting team:', error);
     }
   };
 
-  const handleCreateTeam = () => {
-    const newTeam = createNewTeam('Neues Team');
-    setActiveTeamState(newTeam);
-    setActiveTeam(newTeam.id);
-    setTeams(loadTeamsList());
-    setActiveView('team');
+  const handleCreateTeam = async () => {
+    try {
+      const newTeam = await storage.createNewTeam('Neues Team');
+      setActiveTeamState(newTeam);
+      storage.setActiveTeam(newTeam.id);
+      const updatedTeams = await storage.loadTeamsList();
+      setTeams(updatedTeams);
+      setActiveView('team');
+    } catch (error) {
+      console.error('Error creating team:', error);
+    }
   };
 
-  const handleDeleteTeamRequest = (teamId: string) => {
+  const handleDeleteTeamRequest = async (teamId: string) => {
     if (confirm('Möchten Sie dieses Team wirklich löschen?')) {
-      deleteTeamFromStorage(teamId);
+      try {
+        await storage.deleteTeam(teamId);
+        
+        // If we deleted the active team, switch back to board view
+        if (activeTeam && teamId === activeTeam.id) {
+          setActiveTeamState(null);
+          setActiveView('board');
+        }
+        
+        const updatedTeams = await storage.loadTeamsList();
+        setTeams(updatedTeams);
+      } catch (error) {
+        console.error('Error deleting team:', error);
+      }
+    }
+  };
+
+  const handleRenameTeam = async (teamId: string, newTitle: string) => {
+    try {
+      await storage.renameTeam(teamId, newTitle);
       
-      // If we deleted the active team, switch back to board view
+      // If renaming the active team, update the current team state
       if (activeTeam && teamId === activeTeam.id) {
-        setActiveTeamState(null);
-        setActiveView('board');
+        setActiveTeamState({ ...activeTeam, title: newTitle });
       }
       
-      setTeams(loadTeamsList());
+      const updatedTeams = await storage.loadTeamsList();
+      setTeams(updatedTeams);
+    } catch (error) {
+      console.error('Error renaming team:', error);
     }
   };
 
-  const handleRenameTeam = (teamId: string, newTitle: string) => {
-    renameTeamInStorage(teamId, newTitle);
-    
-    // If renaming the active team, update the current team state
-    if (activeTeam && teamId === activeTeam.id) {
-      setActiveTeamState({ ...activeTeam, title: newTitle });
+  const handleTeamUpdate = async (updatedTeam: Team) => {
+    try {
+      await storage.saveTeam(updatedTeam);
+      setActiveTeamState(updatedTeam);
+    } catch (error) {
+      console.error('Error updating team:', error);
     }
-    
-    setTeams(loadTeamsList());
-  };
-
-  const handleTeamUpdate = (updatedTeam: Team) => {
-    saveTeam(updatedTeam);
-    setActiveTeamState(updatedTeam);
   };
 
   const handleDeleteActiveTeam = () => {
@@ -147,6 +255,38 @@ function App() {
       handleDeleteTeamRequest(activeTeam.id);
     }
   };
+
+  const handleAuthenticated = () => {
+    setIsAuthenticated(true);
+  };
+
+  const handleSignOut = async () => {
+    if (USE_SUPABASE) {
+      await supabase.auth.signOut();
+      setIsAuthenticated(false);
+      setBoard(null);
+      setBoards([]);
+      setTeams([]);
+      setActiveTeamState(null);
+    }
+  };
+
+  // Show auth screen if using Supabase and not authenticated
+  if (USE_SUPABASE && !isAuthenticated) {
+    return <Auth onAuthenticated={handleAuthenticated} />;
+  }
+
+  // Show loading screen
+  if (isLoading || !board) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-100">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+          <p className="text-gray-600">Lade TaskFlow...</p>
+        </div>
+      </div>
+    );
+  }
 
   const deletingBoard = boards.find(b => b.id === deletingBoardId);
 
@@ -169,6 +309,7 @@ function App() {
         onRenameTeam={handleRenameTeam}
         onTeamUpdate={handleTeamUpdate}
         onDeleteActiveTeam={handleDeleteActiveTeam}
+        onSignOut={USE_SUPABASE ? handleSignOut : undefined}
       />
       
       <DeleteBoardModal

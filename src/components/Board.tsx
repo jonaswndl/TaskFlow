@@ -39,6 +39,7 @@ interface BoardProps {
   onRenameTeam: (teamId: string, newTitle: string) => void;
   onTeamUpdate: (team: Team) => void;
   onDeleteActiveTeam: () => void;
+  onSignOut?: () => void;
 }
 
 export const Board: React.FC<BoardProps> = ({ 

@@ -38,5 +38,6 @@ export const formatDate = (dateString: string): string => {
 };
 
 export const generateId = (): string => {
-  return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  // Use crypto.randomUUID() for proper UUID v4 generation
+  return crypto.randomUUID();
 };
