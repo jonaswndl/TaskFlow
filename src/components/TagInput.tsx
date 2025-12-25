@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { X } from 'lucide-react';
 import type { Tag, TagColor } from '../types';
 import { TAG_COLORS, TAG_COLOR_SWATCHES } from '../utils/tagColors';
@@ -8,6 +8,7 @@ interface TagInputProps {
   globalTags: Record<string, Tag>; // All global tags
   onTagsChange: (labels: string[]) => void;
   onGlobalTagUpdate: (label: string, tag: Tag) => void;
+  hideLabel?: boolean; // Option to hide the label
 }
 
 export const TagInput: React.FC<TagInputProps> = ({ 
@@ -15,11 +16,14 @@ export const TagInput: React.FC<TagInputProps> = ({
   globalTags, 
   onTagsChange,
   onGlobalTagUpdate,
+  hideLabel = false,
 }) => {
   const [inputValue, setInputValue] = useState('');
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [editingTagLabel, setEditingTagLabel] = useState<string | null>(null);
+  const [colorPickerPosition, setColorPickerPosition] = useState<{ top: number; left: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const tagRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Get existing tag labels for suggestions
   const existingLabels = Object.keys(globalTags);
@@ -84,9 +88,25 @@ export const TagInput: React.FC<TagInputProps> = ({
     setEditingTagLabel(null);
   };
 
+  // Calculate position for color picker
+  useEffect(() => {
+    if (editingTagLabel && tagRefs.current[editingTagLabel]) {
+      const tagElement = tagRefs.current[editingTagLabel];
+      const rect = tagElement.getBoundingClientRect();
+      
+      // Position the color picker above the tag to avoid overflow issues
+      setColorPickerPosition({
+        top: rect.top - 10, // Position above the tag with some spacing
+        left: rect.left,
+      });
+    }
+  }, [editingTagLabel]);
+
   return (
     <div className="mb-6">
-      <label className="block text-sm font-semibold text-gray-700 mb-3">🏷️ Tags</label>
+      {!hideLabel && (
+        <label className="block text-sm font-semibold text-gray-700 mb-3">🏷️ Tags</label>
+      )}
 
       {/* Input Field */}
       <div className="relative">
@@ -138,7 +158,7 @@ export const TagInput: React.FC<TagInputProps> = ({
           const isEditing = editingTagLabel === label;
 
           return (
-            <div key={label} className="relative">
+            <div key={label} ref={(el) => { tagRefs.current[label] = el; }} className="relative">
               <button
                 onClick={() => setEditingTagLabel(isEditing ? null : label)}
                 className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all flex items-center gap-2 ${colors.bg} ${colors.text} ${colors.border} hover:shadow-md`}
@@ -159,27 +179,43 @@ export const TagInput: React.FC<TagInputProps> = ({
               {isEditing && (
                 <>
                   <div
-                    className="fixed inset-0 z-20"
+                    className="fixed inset-0 z-[9998]"
                     onClick={() => setEditingTagLabel(null)}
                   />
-                  <div className="absolute top-full left-0 mt-1 bg-white rounded-xl shadow-xl border border-gray-200 p-2 z-30 flex gap-2">
-                    {TAG_COLOR_SWATCHES.map(({ color, preview }) => (
-                      <button
-                        key={color}
-                        onClick={() => updateTagColor(label, color)}
-                        className={`w-6 h-6 rounded-lg ${preview} hover:scale-110 transition-transform ${
-                          tag.color === color ? 'ring-2 ring-gray-800 ring-offset-2' : ''
-                        }`}
-                        title={color}
-                      />
-                    ))}
-                  </div>
                 </>
               )}
             </div>
           );
         })}
       </div>
+      
+      {/* Fixed Color Picker - rendered outside of the tag container to avoid overflow issues */}
+      {editingTagLabel && colorPickerPosition && (() => {
+        const tag = globalTags[editingTagLabel];
+        if (!tag) return null;
+        
+        return (
+          <div 
+            className="fixed bg-white rounded-xl shadow-xl border border-gray-200 p-2 z-[9999] flex gap-2"
+            style={{
+              top: `${colorPickerPosition.top}px`,
+              left: `${colorPickerPosition.left}px`,
+              transform: 'translateY(-100%)', // Position above the tag
+            }}
+          >
+            {TAG_COLOR_SWATCHES.map(({ color, preview }) => (
+              <button
+                key={color}
+                onClick={() => updateTagColor(editingTagLabel, color)}
+                className={`w-6 h-6 rounded-lg ${preview} hover:scale-110 transition-transform ${
+                  tag.color === color ? 'ring-2 ring-gray-800 ring-offset-2' : ''
+                }`}
+                title={color}
+              />
+            ))}
+          </div>
+        );
+      })()}
     </div>
   );
 };

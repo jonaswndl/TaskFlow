@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useDroppable } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { MoreVertical, X } from 'lucide-react';
-import type { Column as ColumnType, Task, Tag } from '../types';
+import type { Column as ColumnType, Task, Tag, TeamMember } from '../types';
 import { TaskCard } from './TaskCard';
 
 interface ColumnProps {
@@ -14,6 +14,7 @@ interface ColumnProps {
   onRenameColumn: (columnId: string, newTitle: string) => void;
   onDeleteColumn: (columnId: string) => void;
   isDropTarget?: boolean;
+  assignableMembers?: TeamMember[];
 }
 
 export const Column: React.FC<ColumnProps> = ({
@@ -25,6 +26,7 @@ export const Column: React.FC<ColumnProps> = ({
   onRenameColumn,
   onDeleteColumn,
   isDropTarget = false,
+  assignableMembers = [],
 }) => {
   const [isAddingTask, setIsAddingTask] = useState(false);
   const [newTaskTitle, setNewTaskTitle] = useState('');
@@ -167,7 +169,8 @@ export const Column: React.FC<ColumnProps> = ({
               key={task.id} 
               task={task} 
               globalTags={globalTags}
-              onClick={() => onTaskClick(task)} 
+              onClick={() => onTaskClick(task)}
+              assignableMembers={assignableMembers}
             />
           ))}
         </SortableContext>
